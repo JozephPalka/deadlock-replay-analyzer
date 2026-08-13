@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deadlock Replay Analyzer</title>
+<link rel="stylesheet" href="assets/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>&#127919;</text></svg>">
+<script src="https://cdn.jsdelivr.net/npm/deadem@3.4.1/dist/deadem.min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div>
+    <h1>Deadlock Replay Analyzer</h1>
+    <p class="subtitle">Parses a <code>.dem</code> replay in your browser and looks for the mistakes in it.</p>
+  </div>
+  <div class="topbar-settings">
+    <label for="sample-rate">Detail</label>
+    <select id="sample-rate">
+      <option value="2">Fast (sample every 2s)</option>
+      <option value="1" selected>Balanced (every 1s)</option>
+      <option value="0.5">Precise (every 0.5s)</option>
+    </select>
+  </div>
+</header>
+
+<main>
+
+  <section class="picker">
+    <div id="folder-picker" class="picker-block">
+      <h2>Your replays folder</h2>
+      <p class="muted">
+        Point this at your Deadlock replays folder once and it remembers. It is usually
+        <code>...\Steam\steamapps\common\Deadlock\game\citadel\replays</code>.
+      </p>
+      <div class="button-row">
+        <button id="choose-folder" class="btn btn--primary">Choose replays folder</button>
+        <button id="reconnect" class="btn" hidden>Reconnect folder</button>
+        <span id="folder-name" class="muted"></span>
+      </div>
+      <div id="file-list"></div>
+    </div>
+
+    <p id="no-picker-note" class="muted" hidden>
+      This browser cannot browse a folder directly. Use the file picker or drag a replay in below.
+      Chrome or Edge will give you the folder list.
+    </p>
+
+    <div class="picker-block">
+      <h2>Or open a single file</h2>
+      <div id="drop" class="drop">
+        <p>Drag a <code>.dem</code> file here</p>
+        <p class="muted">or</p>
+        <label class="btn" for="file-input">Browse for a file</label>
+        <input id="file-input" type="file" accept=".dem" hidden>
+      </div>
+    </div>
+  </section>
+
+  <div id="progress" class="progress" hidden>
+    <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+    <p id="progress-label" class="muted"></p>
+    <p class="muted small">Large replays take a while — the whole file is decoded locally, nothing is uploaded anywhere.</p>
+  </div>
+
+  <p id="status" class="status" hidden></p>
+
+  <div id="who" class="who" hidden></div>
+
+  <div id="results"></div>
+
+</main>
+
+<footer class="footer">
+  <p class="muted small">
+    Parsing by <a href="https://github.com/Igor-Losev/deadem" target="_blank" rel="noopener">deadem</a> (MIT).
+    Hero and item names from <a href="https://deadlock-api.com" target="_blank" rel="noopener">deadlock-api</a>.
+    Everything runs on your machine; the replay never leaves it.
+  </p>
+</footer>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

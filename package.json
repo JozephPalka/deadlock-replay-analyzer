@@ -1,0 +1,10 @@
+{
+  "name": "deadlock-replay-analyzer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-based Deadlock .dem replay parser and mistake analyzer",
+  "scripts": {
+    "test": "node selftest.mjs"
+  }
+}

@@ -1,0 +1,6 @@
+# Generated locally by tools/preview.mjs
+preview.html
+
+node_modules/
+.DS_Store
+Thumbs.db
