@@ -748,6 +748,23 @@ export async function parseReplay(file, options = {}) {
     raw.diagnostics.controllerFieldSample = dumpFields(controllers[0]);
   }
 
+  // The demo's own class registry. Item and ability entities carry their
+  // identity in the class name, which is a route to item names that needs no
+  // external service at all — record what this build actually ships.
+  try {
+    const classes = typeof demo.getClasses === 'function' ? demo.getClasses() : [];
+    const names = [];
+    for (const entry of classes) {
+      const name = typeof entry === 'string' ? entry : entry?.name;
+      if (typeof name === 'string') names.push(name);
+    }
+    names.sort();
+    raw.diagnostics.entityClassCount = names.length;
+    raw.diagnostics.itemLikeClasses = names.filter((n) => /item|upgrade/i.test(n)).slice(0, 60);
+  } catch (err) {
+    noteError('classes', err);
+  }
+
   // Auto-detect hero / slot fields rather than hardcoding a schema name.
   const heroField = detectField(controllers, /hero/i, { distinct: true, numeric: true });
   const slotField = detectField(controllers, /slot/i, { distinct: true, numeric: true });

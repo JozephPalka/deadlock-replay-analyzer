@@ -286,8 +286,40 @@ function renderWhoPicker(candidates, teams) {
   });
 }
 
+async function reloadAssets() {
+  if (!state.resolver) return;
+  setStatus('Reloading item names and win rates...');
+  try {
+    // Drop every cached asset payload, including the per-hero stats.
+    for (let i = window.localStorage.length - 1; i >= 0; i -= 1) {
+      const key = window.localStorage.key(i);
+      if (key && key.startsWith('deadlock-analyzer-')) {
+        if (key.includes('assets') || key.includes('itemstats')) window.localStorage.removeItem(key);
+      }
+    }
+  } catch (_) {
+    /* storage may be disabled */
+  }
+
+  state.resolver.items = new Map();
+  state.resolver.heroes = new Map();
+  state.resolver.itemStats = new Map();
+  state.statsRequested = false;
+
+  await state.resolver.load({ force: true });
+  const heroId = state.analysis?.focus?.heroId ?? null;
+  await state.resolver.loadItemStats(heroId);
+
+  setStatus('Item data reloaded.', 'ok');
+  renderResults();
+}
+
 function renderResults() {
-  const context = { raw: state.raw, nameStatus: state.resolver?.status || {} };
+  const context = {
+    raw: state.raw,
+    nameStatus: state.resolver?.status || {},
+    onReloadAssets: reloadAssets
+  };
 
   // If analysis or rendering falls over, still show Diagnostics — that tab is
   // exactly what is needed to work out why.

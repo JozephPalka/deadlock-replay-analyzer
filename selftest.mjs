@@ -591,4 +591,37 @@ check('the Build tab renders when no build analysis was attached', () => {
   assert.ok(mount.innerHTML.includes('Select a player above to analyse their build'));
 });
 
+
+check('diagnostics reports item-name resolution and unresolved ids', () => {
+  // Nothing resolves when the asset service gave us nothing.
+  const blindNames = analyze(raw, { focusCtrl: FOCUS.ctrl, itemName: () => null });
+  const mount = new StubElement();
+  renderAll(blindNames, mount, {
+    raw,
+    nameStatus: {
+      items: 'unavailable',
+      itemAttempts: ['https://api.deadlock-api.com/v1/assets/items -> HTTP 500'],
+      source: null
+    }
+  });
+  const html = mount.innerHTML;
+  assert.ok(html.includes('Item name resolution'), 'no resolution section');
+  assert.ok(html.includes('Unresolved ids'), 'unresolved ids not listed');
+  assert.ok(html.includes('111'), 'the actual ids should be shown so they can be checked');
+  assert.ok(html.includes('HTTP 500'), 'endpoint attempts not surfaced');
+  assert.ok(html.includes('Reload item data'), 'no reload button');
+});
+
+check('diagnostics shows full resolution when names are available', () => {
+  const mount = new StubElement();
+  renderAll({ ...buildAnalysis, build }, mount, {
+    raw,
+    nameStatus: { items: 'loaded 900 of 950 entries', source: 'https://api.deadlock-api.com/v1/assets/items' }
+  });
+  const html = mount.innerHTML;
+  // Four purchases by the focus player plus one by the rival, all resolved.
+  assert.ok(html.includes('5 of 5 purchases'), 'resolution count wrong');
+  assert.ok(!html.includes('Unresolved ids'), 'should not list unresolved ids when all resolve');
+});
+
 console.log(`\n${passed} checks passed${process.exitCode ? ' — with failures above' : ''}\n`);

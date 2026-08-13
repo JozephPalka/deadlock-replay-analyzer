@@ -90,6 +90,14 @@ export function renderAll(analysis, mount, context = {}) {
   });
 
   wireExport(analysis, mount);
+
+  if (typeof context.onReloadAssets === 'function') {
+    mount.querySelector('[data-action="reload-assets"]')?.addEventListener('click', (event) => {
+      event.target.textContent = 'Reloading...';
+      event.target.disabled = true;
+      context.onReloadAssets();
+    });
+  }
 }
 
 /**
@@ -889,10 +897,62 @@ function renderDiagnostics(analysis, context) {
         <tr><td>Map scale derived</td><td>${analysis.frame.ok ? `yes (${Math.round(analysis.frame.span).toLocaleString()} units base to base)` : '<span class="warn">no — spatial analysis is degraded</span>'}</td></tr>`
     : '<tr><td>Analysis</td><td class="warn">did not complete</td></tr>';
 
+  /* Item name resolution — the single most useful thing to see when items show
+     as numeric ids. It separates "the fetch failed" from "the fetch worked but
+     the replay's ids are from a different id space". */
+  const purchaseIds = Array.from(new Set((raw.items || []).map((i) => i.abilityId).filter((v) => v !== null && v !== undefined)));
+  const resolvedItems = analysis ? analysis.items.filter((i) => i.resolved) : [];
+  const unresolvedIds = analysis
+    ? Array.from(new Set(analysis.items.filter((i) => !i.resolved).map((i) => i.abilityId)))
+    : purchaseIds;
+
+  const lookupBlock = `
+    <h3>Item name resolution</h3>
+    <table class="table table--compact"><tbody>
+      <tr><td>Distinct item ids in this replay</td><td>${purchaseIds.length}</td></tr>
+      <tr><td>Resolved to a name</td><td class="${analysis && resolvedItems.length === 0 && purchaseIds.length > 0 ? 'warn' : ''}">${analysis ? `${resolvedItems.length} of ${analysis.items.length} purchases` : 'n/a'}</td></tr>
+      <tr><td>Source used</td><td class="mono">${esc(names.source || 'none')}</td></tr>
+      ${
+        unresolvedIds.length
+          ? `<tr><td>Unresolved ids (sample)</td><td class="mono">${esc(unresolvedIds.slice(0, 12).join(', '))}</td></tr>`
+          : ''
+      }
+    </tbody></table>
+    ${
+      (names.itemAttempts || []).length
+        ? `<p class="muted">Item endpoints tried:</p><ul class="plain mono">${names.itemAttempts.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>`
+        : ''
+    }
+    ${
+      (names.heroAttempts || []).length
+        ? `<p class="muted">Hero endpoints tried:</p><ul class="plain mono">${names.heroAttempts.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>`
+        : ''
+    }
+    ${
+      names.itemSample
+        ? `<details><summary>First entry the asset service returned</summary><pre class="brief">${esc(names.itemSample)}</pre></details>`
+        : ''
+    }
+    <div class="button-row">
+      <button class="btn" data-action="reload-assets">Reload item data</button>
+      <span class="muted small">Clears the cached names and win rates and fetches them again.</span>
+    </div>`;
+
+  const classBlock = (diagnostics.itemLikeClasses || []).length
+    ? `<h3>Item-like entity classes in this replay</h3>
+       <p class="muted">${diagnostics.entityClassCount || 0} entity classes total. These are the ones whose
+       names mention an item or upgrade — a route to item identity that needs no external service.</p>
+       <details><summary>Show ${diagnostics.itemLikeClasses.length}</summary>
+         <ul class="plain mono">${diagnostics.itemLikeClasses.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
+       </details>`
+    : '';
+
   return `
     <h2>Diagnostics</h2>
     <p class="muted">If a number looks wrong anywhere in the app, the answer is usually here. Copy this
     whole tab into a conversation with Claude and it can tell you which field changed.</p>
+    ${lookupBlock}
+    ${classBlock}
 
     <h3>Parse summary</h3>
     <table class="table table--compact">

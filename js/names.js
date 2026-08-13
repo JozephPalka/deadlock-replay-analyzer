@@ -10,13 +10,21 @@
 const CACHE_KEY = 'deadlock-analyzer-assets-v1';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+/*
+ * The asset service is reachable under two hostnames and the API's own docs
+ * point at the api.deadlock-api.com one, so that is tried first. Each is tried
+ * in turn until one returns a usable array — whichever wins is recorded in
+ * Diagnostics so there is no guessing about where a name came from.
+ */
 const ITEM_ENDPOINTS = [
+  'https://api.deadlock-api.com/v1/assets/items',
   'https://assets.deadlock-api.com/v2/items?language=english',
   'https://assets.deadlock-api.com/v2/items',
   'https://assets.deadlock-api.com/v1/items'
 ];
 
 const HERO_ENDPOINTS = [
+  'https://api.deadlock-api.com/v1/assets/heroes',
   'https://assets.deadlock-api.com/v2/heroes?language=english',
   'https://assets.deadlock-api.com/v2/heroes',
   'https://assets.deadlock-api.com/v1/heroes'
@@ -49,18 +57,35 @@ function writeCache(payload) {
   }
 }
 
-async function fetchFirst(endpoints) {
+async function fetchFirst(endpoints, attempts) {
   for (const url of endpoints) {
     try {
       const response = await fetch(url, { mode: 'cors' });
-      if (!response.ok) continue;
+      if (!response.ok) {
+        attempts.push(`${url} -> HTTP ${response.status}`);
+        continue;
+      }
       const data = await response.json();
-      const list = Array.isArray(data) ? data : (data.items || data.heroes || data.data || null);
-      if (Array.isArray(list) && list.length > 0) return { list, url };
-    } catch (_) {
-      /* try the next one */
+      const list = Array.isArray(data) ? data : (data.items || data.heroes || data.data || data.results || null);
+      if (Array.isArray(list) && list.length > 0) {
+        attempts.push(`${url} -> ${list.length} entries`);
+        return { list, url };
+      }
+      attempts.push(`${url} -> 200 but no usable array (keys: ${Object.keys(data || {}).slice(0, 6).join(', ')})`);
+    } catch (err) {
+      attempts.push(`${url} -> ${err && err.message ? err.message : 'request failed'}`);
     }
   }
+  return null;
+}
+
+/**
+ * Ids arrive as numbers from some services and numeric strings from others.
+ * Everything downstream keys on numbers, so coerce once, here.
+ */
+function toId(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value);
   return null;
 }
 
@@ -77,8 +102,8 @@ function normalise(list) {
   const byId = new Map();
   for (const entry of list) {
     if (!entry || typeof entry !== 'object') continue;
-    const id = entry.id ?? entry.item_id ?? entry.hero_id ?? entry.ability_id;
-    if (!Number.isFinite(id)) continue;
+    const id = toId(entry.id ?? entry.item_id ?? entry.hero_id ?? entry.ability_id ?? entry.upgrade_id);
+    if (id === null) continue;
 
     const name =
       (typeof entry.name === 'string' && entry.name) ||
@@ -112,31 +137,49 @@ export class NameResolver {
     this.status = { items: 'not loaded', heroes: 'not loaded', itemStats: 'not loaded', source: null };
   }
 
-  async load() {
-    const cached = readCache();
+  /**
+   * @param {Object} options
+   * @param {boolean} options.force  ignore the cache and refetch
+   */
+  async load(options = {}) {
+    const cached = options.force ? null : readCache();
     if (cached && cached.items && cached.heroes) {
       this.items = new Map(cached.items.map((i) => [i.id, i]));
       this.heroes = new Map(cached.heroes.map((h) => [h.id, h]));
-      this.status = { items: `cached (${this.items.size})`, heroes: `cached (${this.heroes.size})`, source: 'localStorage' };
+      this.status = {
+        ...this.status,
+        items: `cached (${this.items.size})`,
+        heroes: `cached (${this.heroes.size})`,
+        source: 'localStorage — use "Reload item data" in Diagnostics to refetch'
+      };
       return this;
     }
 
+    const itemAttempts = [];
+    const heroAttempts = [];
     const [itemsResult, heroesResult] = await Promise.all([
-      fetchFirst(ITEM_ENDPOINTS),
-      fetchFirst(HERO_ENDPOINTS)
+      fetchFirst(ITEM_ENDPOINTS, itemAttempts),
+      fetchFirst(HERO_ENDPOINTS, heroAttempts)
     ]);
+    this.status.itemAttempts = itemAttempts;
+    this.status.heroAttempts = heroAttempts;
 
     if (itemsResult) {
       this.items = normalise(itemsResult.list);
-      this.status.items = `loaded (${this.items.size})`;
+      this.status.items = `loaded ${this.items.size} of ${itemsResult.list.length} entries`;
       this.status.source = itemsResult.url;
+      // Keep one raw entry so Diagnostics can show the shape we actually got.
+      this.status.itemSample = JSON.stringify(itemsResult.list[0] || {}).slice(0, 600);
+      if (this.items.size === 0) {
+        this.status.items = `fetched ${itemsResult.list.length} entries but none had a usable id — see the sample below`;
+      }
     } else {
       this.status.items = 'unavailable — items will show as numeric ids';
     }
 
     if (heroesResult) {
       this.heroes = normalise(heroesResult.list);
-      this.status.heroes = `loaded (${this.heroes.size})`;
+      this.status.heroes = `loaded ${this.heroes.size} of ${heroesResult.list.length} entries`;
     } else {
       this.status.heroes = 'unavailable — heroes will show as numeric ids';
     }
