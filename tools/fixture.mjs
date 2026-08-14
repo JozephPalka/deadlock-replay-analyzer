@@ -192,15 +192,18 @@ export const itemsById = new Map(ITEMS.map((i) => [i.id, i]));
 export const itemStats = {
   scope: 'hero:10',
   sampleMatches: 4210,
+  // The service returns raw counts; the resolver derives these. Popularity is
+  // relative to the most-bought item, win rate is judged against the baseline.
+  baselineWinRate: 0.5,
   stats: new Map([
-    [111, { id: 111, matches: 4000, winRate: 0.53, pickRate: 0.62, avgBoughtAt: 110 }],
-    // Bought at 400 but usually bought by 100 -> five minutes late.
-    [222, { id: 222, matches: 3800, winRate: 0.51, pickRate: 0.55, avgBoughtAt: 90 }],
-    [444, { id: 444, matches: 2100, winRate: 0.42, pickRate: 0.31, avgBoughtAt: 700 }],
+    [111, { id: 111, matches: 4000, wins: 2120, winRate: 0.53, popularity: 0.62, avgBoughtAt: 110 }],
+    // Bought at 400 but usually bought by 90 -> five minutes late.
+    [222, { id: 222, matches: 3800, wins: 1938, winRate: 0.51, popularity: 0.55, avgBoughtAt: 90 }],
+    [444, { id: 444, matches: 2100, wins: 882, winRate: 0.42, popularity: 0.31, avgBoughtAt: 700 }],
     // Popular and winning, never bought -> should surface as missed.
-    [777, { id: 777, matches: 3900, winRate: 0.56, pickRate: 0.48, avgBoughtAt: 780 }],
-    [888, { id: 888, matches: 3600, winRate: 0.54, pickRate: 0.41, avgBoughtAt: 820 }],
-    [999, { id: 999, matches: 900, winRate: 0.55, pickRate: 0.27, avgBoughtAt: 1500 }]
+    [777, { id: 777, matches: 3900, wins: 2184, winRate: 0.56, popularity: 0.48, avgBoughtAt: 780 }],
+    [888, { id: 888, matches: 3600, wins: 1944, winRate: 0.54, popularity: 0.41, avgBoughtAt: 820 }],
+    [999, { id: 999, matches: 900, wins: 495, winRate: 0.55, popularity: 0.27, avgBoughtAt: 1500 }]
   ])
 };
 

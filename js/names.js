@@ -34,8 +34,9 @@ const STATS_BASE = 'https://api.deadlock-api.com/v1/analytics/item-stats';
 const STATS_CACHE_PREFIX = 'deadlock-analyzer-itemstats-v1:';
 const STATS_TTL_MS = 24 * 60 * 60 * 1000;
 
-/* Tier prices, used only when the asset service does not publish a cost. */
-const TIER_COST = { 1: 500, 2: 1250, 3: 3000, 4: 6200 };
+/* Tier prices, used only when the asset service does not publish a cost.
+ * Verified against the live item list: every tier has exactly one price. */
+const TIER_COST = { 1: 800, 2: 1600, 3: 3200, 4: 6400 };
 
 function readCache() {
   try {
@@ -105,9 +106,13 @@ function normalise(list) {
     const id = toId(entry.id ?? entry.item_id ?? entry.hero_id ?? entry.ability_id ?? entry.upgrade_id);
     if (id === null) continue;
 
-    const name =
-      (typeof entry.name === 'string' && entry.name) ||
-      prettifyClassName(entry.class_name || entry.className) ||
+    // Some entries carry a raw class name in the name field ("citadel_weapon_
+    // bosstier2_set"). Those are internal, not display names, so tidy them up
+    // rather than showing engine identifiers in the report.
+    const rawName = typeof entry.name === 'string' && entry.name ? entry.name : null;
+    const looksInternal = rawName !== null && /^(citadel|upgrade|hero|ability)_/i.test(rawName);
+    const name = (looksInternal ? null : rawName) ||
+      prettifyClassName(entry.class_name || entry.className || rawName) ||
       null;
 
     const cost = entry.cost ?? entry.item_cost ?? entry.properties?.cost ?? null;
@@ -241,6 +246,7 @@ export class NameResolver {
             stats: new Map(parsed.rows.map((r) => [r.id, r])),
             scope,
             sampleMatches: parsed.sampleMatches,
+            baselineWinRate: parsed.baselineWinRate ?? null,
             cached: true
           };
           this.itemStats.set(scope, restored);
@@ -277,25 +283,49 @@ export class NameResolver {
       return null;
     }
 
+    /*
+     * The service returns raw counts, not rates: wins/losses/matches/players
+     * plus average buy and sell times. Win rate is wins over matches. There is
+     * no absolute pick rate available, so popularity is expressed relative to
+     * the most-bought item in the same scope — enough to rank and threshold on,
+     * and labelled as such everywhere it is shown.
+     */
     const rows = [];
     let sampleMatches = 0;
     for (const row of list) {
-      const id = row.item_id ?? row.itemId;
-      if (!Number.isFinite(id)) continue;
-      // When bucketed by hero the response can carry other heroes too.
-      if (Number.isFinite(heroId) && row.bucket_value !== undefined && row.bucket_value !== null) {
-        if (Number(row.bucket_value) !== Number(heroId)) continue;
+      const id = toId(row.item_id ?? row.itemId);
+      if (id === null) continue;
+      // When bucketed by hero the response carries the hero id in `bucket`.
+      if (Number.isFinite(heroId) && row.bucket !== undefined && row.bucket !== null) {
+        if (Number(row.bucket) !== Number(heroId)) continue;
       }
       const matches = row.matches ?? 0;
+      const wins = row.wins ?? 0;
       sampleMatches = Math.max(sampleMatches, matches);
       rows.push({
         id,
         matches,
-        winRate: row.win_rate ?? null,
-        pickRate: row.pick_rate ?? null,
-        avgBoughtAt: row.avg_bought_at_s ?? null,
-        avgNetWorth: row.avg_networth ?? null
+        wins,
+        players: row.players ?? null,
+        winRate: matches > 0 ? wins / matches : null,
+        avgBoughtAt: row.avg_buy_time_s ?? null,
+        avgSoldAt: row.avg_sell_time_s ?? null
       });
+    }
+
+    const maxMatches = rows.reduce((m, r) => Math.max(m, r.matches), 0);
+    let weightedWins = 0;
+    let weightedMatches = 0;
+    for (const row of rows) {
+      row.popularity = maxMatches > 0 ? row.matches / maxMatches : null;
+      weightedWins += row.wins;
+      weightedMatches += row.matches;
+    }
+    // The baseline every item is judged against, weighted by how often each is
+    // actually bought rather than treating a fringe item as equal to a staple.
+    const baselineWinRate = weightedMatches > 0 ? weightedWins / weightedMatches : null;
+    for (const row of rows) {
+      row.winRateVsBaseline = row.winRate !== null && baselineWinRate !== null ? row.winRate - baselineWinRate : null;
     }
 
     if (rows.length === 0) {
@@ -304,12 +334,23 @@ export class NameResolver {
       return null;
     }
 
-    const result = { stats: new Map(rows.map((r) => [r.id, r])), scope, sampleMatches, cached: false };
+    const result = {
+      stats: new Map(rows.map((r) => [r.id, r])),
+      scope,
+      sampleMatches,
+      baselineWinRate,
+      cached: false
+    };
     this.itemStats.set(scope, result);
-    this.status.itemStats = `loaded (${rows.length} items, ${scope})`;
+    this.status.itemStats = `loaded (${rows.length} items, ${scope}, baseline win rate ${
+      baselineWinRate === null ? 'n/a' : `${(baselineWinRate * 100).toFixed(1)}%`
+    })`;
 
     try {
-      window.localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), rows, sampleMatches }));
+      window.localStorage.setItem(
+        cacheKey,
+        JSON.stringify({ savedAt: Date.now(), rows, sampleMatches, baselineWinRate })
+      );
     } catch (_) {
       /* ignore */
     }

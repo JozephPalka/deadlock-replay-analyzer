@@ -245,7 +245,7 @@ export function buildMarkdownBrief(analysis) {
           push('Popular, high-win-rate items I never bought:');
           for (const m of build.benchmark.missed) {
             push(
-              `- ${m.name} — ${Math.round(m.pickRate * 100)}% pick, ${Math.round(m.winRate * 100)}% win${Number.isFinite(m.avgBoughtAt) ? `, usually by ${formatClock(m.avgBoughtAt)}` : ''}`
+              `- ${m.name} — ${Math.round(m.winRate * 100)}% win (${m.vsBaseline > 0 ? '+' : ''}${(m.vsBaseline * 100).toFixed(1)} vs the average item), popularity ${Math.round(m.popularity * 100)}% of the most-bought item${Number.isFinite(m.avgBoughtAt) ? `, usually by ${formatClock(m.avgBoughtAt)}` : ''}`
             );
           }
           push();

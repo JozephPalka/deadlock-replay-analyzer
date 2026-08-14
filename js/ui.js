@@ -462,18 +462,20 @@ function renderBuild(analysis, ctx) {
   const bench = build.benchmark;
   const benchBlock = bench.available
     ? `
-      <p class="muted">Compared against ${bench.sampleMatches.toLocaleString()} recent matches
+      <p class="muted">Compared against up to ${bench.sampleMatches.toLocaleString()} recent matches
       ${bench.scope && bench.scope.startsWith('hero:') ? `on ${esc(build.hero || 'this hero')}` : 'across all heroes'}
-      (deadlock-api, last 30 days). Win rate is correlation, not proof — a losing game buys different items.</p>
+      (deadlock-api, last 30 days). Items are judged against the average win rate of all items in that
+      scope${bench.baselineWinRate ? ` (${(bench.baselineWinRate * 100).toFixed(1)}%)` : ''}, and popularity is
+      relative to the most-bought item. Win rate is correlation, not proof — a losing game buys different items.</p>
       <div class="split">
         <div>
           <h3>Popular items you never bought</h3>
           ${
             bench.missed.length
-              ? `<table class="table table--compact"><thead><tr><th>Item</th><th class="right">Pick</th><th class="right">Win</th><th class="right">Usually by</th></tr></thead><tbody>${bench.missed
+              ? `<table class="table table--compact"><thead><tr><th>Item</th><th class="right" title="How often it is bought, relative to the most-bought item">Popularity</th><th class="right">Win</th><th class="right" title="Win rate minus the average across all items in this scope">vs avg</th><th class="right">Usually by</th></tr></thead><tbody>${bench.missed
                   .map(
                     (m) =>
-                      `<tr><td>${esc(m.name)}</td><td class="right">${Math.round(m.pickRate * 100)}%</td><td class="right">${Math.round(m.winRate * 100)}%</td><td class="right">${Number.isFinite(m.avgBoughtAt) ? formatClock(m.avgBoughtAt) : '—'}</td></tr>`
+                      `<tr><td>${esc(m.name)}</td><td class="right">${Math.round(m.popularity * 100)}%</td><td class="right">${Math.round(m.winRate * 100)}%</td><td class="right ok">+${(m.vsBaseline * 100).toFixed(1)}</td><td class="right">${Number.isFinite(m.avgBoughtAt) ? formatClock(m.avgBoughtAt) : '—'}</td></tr>`
                   )
                   .join('')}</tbody></table>`
               : '<p class="muted">None — you covered the popular picks.</p>'

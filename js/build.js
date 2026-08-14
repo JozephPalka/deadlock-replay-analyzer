@@ -7,9 +7,11 @@
  *      kind, who dealt it, how much healing the enemy team put out, how many
  *      souls you were sitting on and for how long. None of this is opinion.
  *
- *   2. What real matches say. Per-item win rate, pick rate and average
- *      purchase time for your hero, from deadlock-api. Optional: if the call
- *      fails, everything in (1) still works and the UI says benchmarking is off.
+ *   2. What real matches say. Per-item win rate, popularity and average
+ *      purchase time for your hero, from deadlock-api. The service returns raw
+ *      counts, so win rate is wins/matches and popularity is relative to the
+ *      most-bought item in the same scope. Optional: if the call fails,
+ *      everything in (1) still works and the UI says benchmarking is off.
  *
  * A suggestion is only made where both point the same way, and every suggestion
  * carries the evidence that produced it. Where the item list does not contain a
@@ -200,7 +202,7 @@ export function analyzeBuild(analysis, raw, options = {}) {
       benchmark: stat
         ? {
             winRate: stat.winRate,
-            pickRate: stat.pickRate,
+            popularity: stat.popularity,
             avgBoughtAt: stat.avgBoughtAt,
             delta: Number.isFinite(stat.avgBoughtAt) ? purchase.t - stat.avgBoughtAt : null,
             matches: stat.matches
@@ -320,32 +322,53 @@ export function analyzeBuild(analysis, raw, options = {}) {
     result.benchmark.available = true;
     result.benchmark.scope = itemStats.scope;
     result.benchmark.sampleMatches = itemStats.sampleMatches;
+    result.benchmark.baselineWinRate = itemStats.baselineWinRate ?? null;
 
     const bought = new Set(mine.map((i) => i.abilityId));
+
+    /*
+     * Win rates across all items sit in a narrow band around the baseline, so
+     * an absolute cutoff like "52%" would either catch everything or nothing
+     * depending on the patch. Judge each item against the scope's own baseline
+     * instead. Popularity is relative to the most-bought item in the scope.
+     */
+    const baseline = itemStats.baselineWinRate;
+    const GOOD_MARGIN = 0.01;
+    const BAD_MARGIN = 0.015;
 
     for (const [id, stat] of itemStats.stats.entries()) {
       const meta = itemsById.get(id);
       const name = meta?.name || `Item #${id}`;
+      const above = baseline !== null && stat.winRate !== null ? stat.winRate - baseline : null;
+
       if (bought.has(id)) {
         result.benchmark.matched += 1;
-        if (stat.winRate !== null && stat.winRate < 0.47 && stat.matches >= 50) {
-          result.benchmark.lowValue.push({ id, name, winRate: stat.winRate, pickRate: stat.pickRate, matches: stat.matches });
+        if (above !== null && above < -BAD_MARGIN && stat.matches >= 500) {
+          result.benchmark.lowValue.push({
+            id,
+            name,
+            winRate: stat.winRate,
+            vsBaseline: above,
+            popularity: stat.popularity,
+            matches: stat.matches
+          });
         }
-      } else if (stat.pickRate !== null && stat.pickRate >= 0.25 && stat.winRate !== null && stat.winRate >= 0.52) {
+      } else if (stat.popularity !== null && stat.popularity >= 0.25 && above !== null && above > GOOD_MARGIN) {
         result.benchmark.missed.push({
           id,
           name,
           slot: meta?.slot ?? null,
           winRate: stat.winRate,
-          pickRate: stat.pickRate,
+          vsBaseline: above,
+          popularity: stat.popularity,
           avgBoughtAt: stat.avgBoughtAt,
           matches: stat.matches
         });
       }
     }
 
-    result.benchmark.missed.sort((a, b) => b.pickRate - a.pickRate).splice(8);
-    result.benchmark.lowValue.sort((a, b) => a.winRate - b.winRate).splice(5);
+    result.benchmark.missed.sort((a, b) => b.popularity - a.popularity).splice(8);
+    result.benchmark.lowValue.sort((a, b) => a.vsBaseline - b.vsBaseline).splice(5);
 
     for (const purchase of result.purchases) {
       const b = purchase.benchmark;
@@ -537,10 +560,13 @@ function buildSuggestions(build, analysis, itemsById, itemStats) {
       add(
         'medium',
         `${build.benchmark.missed.length} popular, high-win-rate items never appeared in your build`,
-        `These are items that at least a quarter of players ${scopeNote} buy, and that correlate with winning. That does not make them mandatory, but skipping all of them is worth a second look.`,
+        `These are commonly bought ${scopeNote} and win more often than the average item there. That does not make them mandatory, but skipping all of them is worth a second look.`,
         build.benchmark.missed
           .slice(0, 5)
-          .map((m) => `${m.name} — ${pct(m.pickRate)}% pick, ${pct(m.winRate)}% win${Number.isFinite(m.avgBoughtAt) ? `, usually by ${formatClock(m.avgBoughtAt)}` : ''}`),
+          .map(
+            (m) =>
+              `${m.name} — ${pct(m.winRate)}% win (${m.vsBaseline > 0 ? '+' : ''}${(m.vsBaseline * 100).toFixed(1)} vs baseline), popularity ${pct(m.popularity)}% of the most-bought item${Number.isFinite(m.avgBoughtAt) ? `, usually by ${formatClock(m.avgBoughtAt)}` : ''}`
+          ),
         build.benchmark.missed.slice(0, 3).map((m) => ({ id: m.id, name: m.name, winRate: m.winRate, cost: null, tier: null }))
       );
     }
@@ -563,8 +589,10 @@ function buildSuggestions(build, analysis, itemsById, itemStats) {
       add(
         'good',
         `${build.benchmark.lowValue.length} of your purchases underperform in real matches`,
-        `These items sit below a 47% win rate ${scopeNote}. Win rate is not causation — a losing game buys different items — but a consistent pattern across replays is worth acting on.`,
-        build.benchmark.lowValue.map((l) => `${l.name} — ${pct(l.winRate)}% win over ${l.matches.toLocaleString()} matches`),
+        `These win less often than the average item ${scopeNote}. Win rate is not causation — a losing game buys different items — but a consistent pattern across replays is worth acting on.`,
+        build.benchmark.lowValue.map(
+          (l) => `${l.name} — ${pct(l.winRate)}% win (${(l.vsBaseline * 100).toFixed(1)} vs baseline) over ${l.matches.toLocaleString()} matches`
+        ),
         []
       );
     }
