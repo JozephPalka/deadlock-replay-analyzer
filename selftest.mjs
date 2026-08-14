@@ -26,7 +26,7 @@ const check = (name, fn) => {
 };
 
 import { raw, FOCUS, RIVAL, AMBER_BASE, SAPPHIRE_BASE, samples, itemsById, itemStats } from './tools/fixture.mjs';
-import { analyzeBuild, labelDamageTypes } from './js/build.js';
+import { analyzeBuild, classifyAbility, damageSources } from './js/build.js';
 
 /* ------------------------------------------------------------------ */
 /* tests                                                               */
@@ -423,18 +423,54 @@ const buildAnalysis = analyze(raw, {
 const build = analyzeBuild(buildAnalysis, raw, { itemsById, itemStats });
 const buildNoStats = analyzeBuild(buildAnalysis, raw, { itemsById, itemStats: null });
 
-check('damage types are classified by ability presence, not a hardcoded table', () => {
-  const labels = labelDamageTypes(raw.damageByType);
-  assert.equal(labels.get(1).label, 'weapon', 'type 1 carried no ability ids');
-  assert.equal(labels.get(3).label, 'ability', 'type 3 was all ability hits');
+check('damage is classified by what the ability actually is', () => {
+  // The regression: in Deadlock a gun IS an ability, so every damage event
+  // carries an ability id. Classifying on "has an ability id" made everything
+  // read as 100% ability. The asset list knows a rifle from a fire bomb.
+  assert.equal(classifyAbility(6001, itemsById), 'weapon', 'a gun must not count as ability damage');
+  assert.equal(classifyAbility(7001, itemsById), 'ability');
+  assert.equal(classifyAbility(111, itemsById), 'item', 'item procs are their own bucket');
+  assert.equal(classifyAbility(0, itemsById), 'weapon', 'no ability id means plain weapon fire');
+  assert.equal(classifyAbility(999999, itemsById), 'unclassified', 'unknown ids must not be guessed');
+});
+
+check('unknown ability ids stay unclassified and suppress resist advice', () => {
+  const mystery = {
+    ...raw,
+    damageByType: [{ ctrl: FOCUS.ctrl, dir: 'taken', type: 3, abilityId: 424242, dmg: 10000, hits: 50 }]
+  };
+  const a = analyze(mystery, { focusCtrl: FOCUS.ctrl, itemName: (id) => itemsById.get(id) || null });
+  const b = analyzeBuild(a, mystery, { itemsById, itemStats });
+  assert.equal(b.damage.taken.unclassified, 10000);
+  assert.equal(b.damage.taken.classified, 0);
+  assert.equal(b.damage.taken.abilityShare, null, 'no share can be claimed from unclassified damage');
+  assert.ok(!b.suggestions.some((s) => /resist/i.test(s.title)), 'must not advise resists off unknown data');
+  assert.ok(b.notes.some((n) => /resist advice is withheld/i.test(n)), 'should say why');
+  assert.ok(b.notes.some((n) => /Only 0% of the damage/i.test(n)), 'should quantify the coverage');
+});
+
+check('damage sources are listed with their resolved names for diagnosis', () => {
+  const sources = damageSources(raw.damageByType, itemsById);
+  const rifle = sources.find((s) => s.abilityId === 6001);
+  assert.equal(rifle.name, 'Rifle');
+  assert.equal(rifle.kind, 'weapon');
+  assert.equal(rifle.label, 'weapon');
+  const bomb = sources.find((s) => s.abilityId === 7001);
+  assert.equal(bomb.label, 'ability');
+  assert.equal(bomb.dmg, 11000, 'aggregates taken and dealt across players');
 });
 
 check('the damage profile splits what actually hit you', () => {
   const taken = build.damage.taken;
   assert.equal(taken.total, 10000);
-  assert.equal(taken.weapon, 3000);
+  assert.equal(taken.weapon, 3000, 'the gun is weapon damage even though it has an ability id');
   assert.equal(taken.ability, 7000);
+  assert.equal(taken.unclassified, 0);
   assert.ok(Math.abs(taken.abilityShare - 0.7) < 1e-9, `share ${taken.abilityShare}`);
+  assert.ok(Math.abs(taken.weaponShare - 0.3) < 1e-9, `share ${taken.weaponShare}`);
+  // Two separate abilities should stay separate in the per-source breakdown.
+  assert.equal(taken.detail.length, 3);
+  assert.deepEqual(taken.detail.map((d) => d.name), ['Fire Bomb', 'Rifle', 'Shadow Bolt']);
 });
 
 check('purchases are ordered with running spend and slot categories', () => {
@@ -534,6 +570,7 @@ check('what killed you is broken down per death', () => {
   const first = build.deathContext[0];
   assert.equal(first.breakdown[0].name, 'S1');
   assert.equal(first.breakdown[0].label, 'ability');
+  assert.equal(first.breakdown[0].source, 'Fire Bomb', 'the actual ability should be named');
   assert.equal(first.itemsOwned, 1, 'only the 02:00 item was owned by 05:00');
   assert.ok(Math.abs(first.abilityShare - 0.75) < 1e-9, `share ${first.abilityShare}`);
 });

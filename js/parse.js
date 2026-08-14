@@ -318,22 +318,27 @@ export async function parseReplay(file, options = {}) {
   const playersByCtrl = new Map();
   const damageBuckets = new Map(); // "a|v|bucket" -> {dmg, hits}
 
-  // Damage split by Valve's citadel damage type, per player and direction.
-  // The numeric types are undocumented, so we also count how many hits carried
-  // an ability id — that is what lets us label a type as weapon or ability
-  // later without hardcoding a mapping that a patch could invalidate.
-  const typeTotals = new Map(); // "ctrl|dir|type" -> {dmg, hits, abilityHits}
+  /*
+   * Damage is aggregated per (player, direction, damage type, ability id).
+   *
+   * Keeping the ability id is the whole point: in Deadlock a hero's gun is
+   * itself an ability, so "did this carry an ability id" tells you nothing —
+   * everything does. The ability id, though, can be looked up in the asset
+   * list, where weapons and abilities are distinct types. That lookup happens
+   * in build.js, which is where the item metadata lives; the parser just
+   * records the facts.
+   */
+  const typeTotals = new Map(); // "ctrl|dir|type|ability" -> {dmg, hits}
 
-  const addTypeTotal = (ctrl, dir, type, dmg, hits, fromAbility) => {
-    const key = `${ctrl}|${dir}|${type}`;
+  const addTypeTotal = (ctrl, dir, type, abilityId, dmg, hits) => {
+    const key = `${ctrl}|${dir}|${type}|${abilityId}`;
     let entry = typeTotals.get(key);
     if (!entry) {
-      entry = { ctrl, dir, type, dmg: 0, hits: 0, abilityHits: 0 };
+      entry = { ctrl, dir, type, abilityId, dmg: 0, hits: 0 };
       typeTotals.set(key, entry);
     }
     entry.dmg += dmg;
     entry.hits += hits;
-    if (fromAbility) entry.abilityHits += hits;
   };
 
   // A short rolling window of incoming damage per player, so that when someone
@@ -358,15 +363,14 @@ export async function parseReplay(file, options = {}) {
     const totals = new Map();
     for (const event of list) {
       if (event.t < at - PRE_DEATH_WINDOW) continue;
-      const key = `${event.a}|${event.type}`;
+      const key = `${event.a}|${event.type}|${event.abilityId}`;
       let entry = totals.get(key);
       if (!entry) {
-        entry = { attacker: event.a, type: event.type, dmg: 0, hits: 0, abilityHits: 0 };
+        entry = { attacker: event.a, type: event.type, abilityId: event.abilityId, dmg: 0, hits: 0 };
         totals.set(key, entry);
       }
       entry.dmg += event.dmg;
       entry.hits += 1;
-      if (event.ability) entry.abilityHits += 1;
     }
     return Array.from(totals.values()).sort((x, y) => y.dmg - x.dmg);
   };
@@ -610,12 +614,11 @@ export async function parseReplay(file, options = {}) {
 
         const type = data.citadelType ?? data.citadel_type ?? data.type ?? -1;
         const abilityId = data.abilityId ?? data.ability_id ?? 0;
-        const fromAbility = Boolean(abilityId);
         const hits = data.hits && data.hits > 0 ? data.hits : 1;
 
-        addTypeTotal(v, 'taken', type, amount, hits, fromAbility);
-        addTypeTotal(a, 'dealt', type, amount, hits, fromAbility);
-        rememberDamage(v, { t: clock.clockGame, a, dmg: amount, type, ability: fromAbility });
+        addTypeTotal(v, 'taken', type, abilityId, amount, hits);
+        addTypeTotal(a, 'dealt', type, abilityId, amount, hits);
+        rememberDamage(v, { t: clock.clockGame, a, dmg: amount, type, abilityId });
         return;
       }
 

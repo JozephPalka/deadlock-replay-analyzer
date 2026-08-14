@@ -187,7 +187,19 @@ export const ITEMS = [
   { id: 999, name: 'Decay', cost: 3000, tier: 3, slot: 'spirit' }
 ];
 
-export const itemsById = new Map(ITEMS.map((i) => [i.id, i]));
+/* Weapons and abilities live in the same asset list as items, distinguished by
+ * `kind` — that distinction is what the damage classifier relies on. */
+export const ABILITIES = [
+  { id: 6001, name: 'Rifle', kind: 'weapon', className: 'citadel_weapon_hero_rifle' },
+  { id: 6002, name: 'SMG', kind: 'weapon', className: 'citadel_weapon_hero_smg' },
+  { id: 7001, name: 'Fire Bomb', kind: 'ability', className: 'citadel_ability_firebomb' },
+  { id: 7002, name: 'Shadow Bolt', kind: 'ability', className: 'citadel_ability_shadowbolt' },
+  { id: 7003, name: 'Ice Path', kind: 'ability', className: 'citadel_ability_icepath' }
+];
+
+export const itemsById = new Map(
+  [...ITEMS.map((i) => ({ ...i, kind: 'upgrade' })), ...ABILITIES].map((i) => [i.id, i])
+);
 
 export const itemStats = {
   scope: 'hero:10',
@@ -217,13 +229,19 @@ raw.items = [
   { t: 200, userid: 1, ctrl: RIVAL.ctrl, abilityId: 777, sell: false, quickbuy: false }
 ];
 
-/* 30% weapon fire (type 1), 70% ability damage (type 3). */
+/*
+ * Damage sources carry the ability id that produced them. Note that the gun
+ * (id 6001) carries an ability id just like the real game does — the whole
+ * point of the classifier is that it cannot use "has an ability id" to decide.
+ * 30% weapon fire, 70% ability damage.
+ */
 raw.damageByType = [
-  { ctrl: FOCUS.ctrl, dir: 'taken', type: 1, dmg: 3000, hits: 120, abilityHits: 0 },
-  { ctrl: FOCUS.ctrl, dir: 'taken', type: 3, dmg: 7000, hits: 40, abilityHits: 40 },
-  { ctrl: FOCUS.ctrl, dir: 'dealt', type: 1, dmg: 9000, hits: 300, abilityHits: 0 },
-  { ctrl: FOCUS.ctrl, dir: 'dealt', type: 3, dmg: 2000, hits: 20, abilityHits: 20 },
-  { ctrl: RIVAL.ctrl, dir: 'dealt', type: 3, dmg: 6000, hits: 30, abilityHits: 30 }
+  { ctrl: FOCUS.ctrl, dir: 'taken', type: 1, abilityId: 6001, dmg: 3000, hits: 120 },
+  { ctrl: FOCUS.ctrl, dir: 'taken', type: 3, abilityId: 7001, dmg: 5000, hits: 25 },
+  { ctrl: FOCUS.ctrl, dir: 'taken', type: 3, abilityId: 7002, dmg: 2000, hits: 15 },
+  { ctrl: FOCUS.ctrl, dir: 'dealt', type: 1, abilityId: 6002, dmg: 9000, hits: 300 },
+  { ctrl: FOCUS.ctrl, dir: 'dealt', type: 3, abilityId: 7003, dmg: 2000, hits: 20 },
+  { ctrl: RIVAL.ctrl, dir: 'dealt', type: 3, abilityId: 7001, dmg: 6000, hits: 30 }
 ];
 
 /* One enemy responsible for most of it. */
@@ -236,10 +254,10 @@ raw.damageTotals = {
 
 /* What was hitting the focus player in the seconds before each of their deaths. */
 raw.kills[0].preDeathDamage = [
-  { attacker: RIVAL.ctrl, type: 3, dmg: 900, hits: 4, abilityHits: 4 },
-  { attacker: 8, type: 1, dmg: 300, hits: 12, abilityHits: 0 }
+  { attacker: RIVAL.ctrl, type: 3, abilityId: 7001, dmg: 900, hits: 4 },
+  { attacker: 8, type: 1, abilityId: 6001, dmg: 300, hits: 12 }
 ];
-raw.kills[1].preDeathDamage = [{ attacker: RIVAL.ctrl, type: 3, dmg: 1100, hits: 5, abilityHits: 5 }];
+raw.kills[1].preDeathDamage = [{ attacker: RIVAL.ctrl, type: 3, abilityId: 7001, dmg: 1100, hits: 5 }];
 
 /* The enemy team healed a lot, and nobody on our side bought anti-heal. */
 for (const player of players) {

@@ -364,10 +364,21 @@ function renderBuild(analysis, ctx) {
       ? barRows({
           rows: [
             { label: 'Weapon fire', value: Math.round(taken.weapon), color: COLORS.amber },
-            { label: 'Ability / spirit', value: Math.round(taken.ability), color: '#8b95f6' },
-            { label: 'Unclassified', value: Math.round(taken.mixed), color: COLORS.text }
+            { label: 'Abilities', value: Math.round(taken.ability), color: '#8b95f6' },
+            { label: 'Item procs', value: Math.round(taken.item), color: COLORS.focus },
+            { label: 'Unclassified', value: Math.round(taken.unclassified), color: COLORS.text }
           ].filter((r) => r.value > 0)
-        })
+        }) +
+        (taken.detail.length
+          ? `<details class="help"><summary>By source (${taken.detail.length})</summary>
+             <table class="table table--compact"><thead><tr><th>Source</th><th>Kind</th><th class="right">Damage</th><th class="right">Hits</th></tr></thead><tbody>${taken.detail
+               .slice(0, 20)
+               .map(
+                 (d) =>
+                   `<tr><td>${esc(d.name)}</td><td class="muted">${esc(d.label)}</td><td class="right">${num(d.dmg)}</td><td class="right">${num(d.hits)}</td></tr>`
+               )
+               .join('')}</tbody></table></details>`
+          : '')
       : '<p class="muted">No hero damage was captured against you.</p>';
 
   const threatRows = build.threats.length
@@ -449,7 +460,12 @@ function renderBuild(analysis, ctx) {
               <td class="right ${d.soulsBanked !== null && d.soulsBanked > 2000 ? 'warn' : ''}">${num(d.soulsBanked)}</td>
               <td class="muted">${
                 d.breakdown.length
-                  ? d.breakdown.map((b) => `${esc(b.name)} ${num(b.dmg)} <span class="flag">${b.label}</span>`).join(', ')
+                  ? d.breakdown
+                      .map(
+                        (b) =>
+                          `${esc(b.name)} ${num(b.dmg)} <span class="flag">${esc(b.source || b.label)}</span>`
+                      )
+                      .join(', ')
                   : 'not captured'
               }</td>
             </tr>`
@@ -505,7 +521,7 @@ function renderBuild(analysis, ctx) {
     <div class="cards">
       <div class="card"><span class="card-label">Items bought</span><span class="card-value">${build.purchases.length}</span></div>
       <div class="card"><span class="card-label">Souls committed</span><span class="card-value">${num(build.spend.totalCommitted)}</span></div>
-      <div class="card"><span class="card-label">Damage taken: ability</span><span class="card-value">${taken && taken.abilityShare !== null ? `${Math.round(taken.abilityShare * 100)}%` : '—'}</span></div>
+      <div class="card"><span class="card-label">Damage taken: abilities</span><span class="card-value">${taken && taken.abilityShare !== null ? `${Math.round(taken.abilityShare * 100)}%` : '—'}</span></div>
       <div class="card"><span class="card-label">Damage taken: weapon</span><span class="card-value">${taken && taken.weaponShare !== null ? `${Math.round(taken.weaponShare * 100)}%` : '—'}</span></div>
       <div class="card"><span class="card-label">Enemy healing</span><span class="card-value">${num(build.enemyHealing, '0')}</span></div>
       <div class="card"><span class="card-label">Longest soul bank</span><span class="card-value">${
@@ -528,7 +544,13 @@ function renderBuild(analysis, ctx) {
     <div class="split">
       <div>
         <h3>Damage taken by kind</h3>
-        <p class="muted">Classified by whether the damage carried an ability, not by a hardcoded type table.</p>
+        <p class="muted">Each damage event is attributed to the ability that caused it, then looked up in the
+        live asset list — where a hero's gun, their abilities and item procs are distinct types. Percentages are
+        of the damage that could be attributed.${
+          taken && taken.total > 0 && taken.unclassified > 0
+            ? ` <span class="warn">${Math.round((taken.unclassified / taken.total) * 100)}% could not be attributed.</span>`
+            : ''
+        }</p>
         ${damageRows}
       </div>
       <div>
@@ -940,6 +962,22 @@ function renderDiagnostics(analysis, context) {
       <span class="muted small">Clears the cached names and win rates and fetches them again.</span>
     </div>`;
 
+  const sources = analysis?.build?.damage?.sources || [];
+  const sourceBlock = sources.length
+    ? `<h3>Damage sources and how they were classified</h3>
+       <p class="muted">Every damage event is attributed to its ability id, then looked up in the asset list.
+       A source showing <span class="mono">unclassified</span> means that id is not in the item list — which is
+       what to send back if the weapon/ability split looks wrong.</p>
+       <table class="table table--compact"><thead><tr><th>Source</th><th>Ability id</th><th>Asset type</th><th>Classified as</th><th class="right">Damage</th><th>citadel_type</th></tr></thead>
+       <tbody>${sources
+         .slice(0, 25)
+         .map(
+           (d) =>
+             `<tr><td>${esc(d.name)}</td><td class="mono">${d.abilityId}</td><td class="muted">${esc(d.kind || '—')}</td><td class="${d.label === 'unclassified' ? 'warn' : ''}">${esc(d.label)}</td><td class="right">${num(d.dmg)}</td><td class="mono">${esc(d.types.join(', '))}</td></tr>`
+         )
+         .join('')}</tbody></table>`
+    : '';
+
   const classBlock = (diagnostics.itemLikeClasses || []).length
     ? `<h3>Item-like entity classes in this replay</h3>
        <p class="muted">${diagnostics.entityClassCount || 0} entity classes total. These are the ones whose
@@ -954,6 +992,7 @@ function renderDiagnostics(analysis, context) {
     <p class="muted">If a number looks wrong anywhere in the app, the answer is usually here. Copy this
     whole tab into a conversation with Claude and it can tell you which field changed.</p>
     ${lookupBlock}
+    ${sourceBlock}
     ${classBlock}
 
     <h3>Parse summary</h3>

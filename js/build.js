@@ -45,61 +45,114 @@ const SLOT_LABEL = {
 /* ------------------------------------------------------------------ */
 
 /**
- * Valve's citadel damage type numbers are undocumented and have changed before,
- * so rather than hardcoding "3 means spirit" we infer it: damage carrying an
- * ability id is ability damage, damage that does not is weapon fire. Applying
- * that across the whole match gives a stable label per numeric type.
+ * Classify one damage event by the ability that caused it.
+ *
+ * The obvious heuristic — "damage carrying an ability id is ability damage" —
+ * is wrong in Deadlock, because a hero's gun is an ability too, so every event
+ * carries one and everything reads as 100% ability. The asset list does draw
+ * the distinction: weapons, abilities and items are separate `type` values
+ * there. So resolve the ability id and use what the game itself says it is.
+ *
+ * Anything that cannot be resolved stays 'unclassified' rather than being
+ * guessed into a bucket that drives resist advice.
+ *
+ * @returns {'weapon'|'ability'|'item'|'unclassified'}
  */
-export function labelDamageTypes(damageByType = []) {
-  const perType = new Map();
+export function classifyAbility(abilityId, itemsById) {
+  // No ability at all is plain weapon fire on the builds that report it that way.
+  if (!abilityId) return 'weapon';
+  const meta = itemsById ? itemsById.get(abilityId) : null;
+  if (!meta) return 'unclassified';
+
+  const kind = (meta.kind || '').toLowerCase();
+  if (kind === 'weapon') return 'weapon';
+  if (kind === 'ability') return 'ability';
+  if (kind === 'upgrade') return 'item';
+
+  // Fall back to the class name when the asset entry has no type.
+  const cls = (meta.className || meta.name || '').toLowerCase();
+  if (/weapon/.test(cls)) return 'weapon';
+  if (/^upgrade_/.test(cls)) return 'item';
+  if (/ability/.test(cls)) return 'ability';
+  return 'unclassified';
+}
+
+/**
+ * Aggregates the whole match's damage by ability so Diagnostics can show what
+ * each source actually was — the fastest way to see a misclassification.
+ */
+export function damageSources(damageByType = [], itemsById = new Map()) {
+  const byAbility = new Map();
   for (const row of damageByType) {
-    let entry = perType.get(row.type);
+    const id = row.abilityId ?? 0;
+    let entry = byAbility.get(id);
     if (!entry) {
-      entry = { type: row.type, dmg: 0, hits: 0, abilityHits: 0 };
-      perType.set(row.type, entry);
+      const meta = itemsById.get(id) || null;
+      entry = {
+        abilityId: id,
+        name: meta?.name ?? (id ? `#${id}` : 'no ability id'),
+        kind: meta?.kind ?? null,
+        label: classifyAbility(id, itemsById),
+        types: new Set(),
+        dmg: 0,
+        hits: 0
+      };
+      byAbility.set(id, entry);
     }
     entry.dmg += row.dmg;
     entry.hits += row.hits;
-    entry.abilityHits += row.abilityHits;
+    entry.types.add(row.type);
   }
-
-  const labels = new Map();
-  for (const entry of perType.values()) {
-    const abilityShare = entry.hits > 0 ? entry.abilityHits / entry.hits : 0;
-    const label = abilityShare >= 0.75 ? 'ability' : abilityShare <= 0.25 ? 'weapon' : 'mixed';
-    labels.set(entry.type, { label, abilityShare, dmg: entry.dmg, hits: entry.hits });
-  }
-  return labels;
+  return Array.from(byAbility.values())
+    .map((e) => ({ ...e, types: Array.from(e.types) }))
+    .sort((a, b) => b.dmg - a.dmg);
 }
 
-function damageProfileFor(raw, ctrl, direction, labels) {
+function damageProfileFor(raw, ctrl, direction, itemsById) {
   const rows = (raw.damageByType || []).filter((r) => r.ctrl === ctrl && r.dir === direction);
   const total = rows.reduce((sum, r) => sum + r.dmg, 0);
 
-  const byLabel = { weapon: 0, ability: 0, mixed: 0 };
-  const detail = [];
+  const byLabel = { weapon: 0, ability: 0, item: 0, unclassified: 0 };
+  const detail = new Map();
+
   for (const row of rows) {
-    const info = labels.get(row.type) || { label: 'mixed' };
-    byLabel[info.label] = (byLabel[info.label] || 0) + row.dmg;
-    detail.push({
-      type: row.type,
-      label: info.label,
-      dmg: row.dmg,
-      hits: row.hits,
-      share: total > 0 ? row.dmg / total : 0
-    });
+    const label = classifyAbility(row.abilityId ?? 0, itemsById);
+    byLabel[label] = (byLabel[label] || 0) + row.dmg;
+
+    const meta = itemsById.get(row.abilityId ?? 0) || null;
+    const key = row.abilityId ?? 0;
+    let entry = detail.get(key);
+    if (!entry) {
+      entry = {
+        abilityId: key,
+        name: meta?.name ?? (key ? `#${key}` : 'weapon fire'),
+        label,
+        dmg: 0,
+        hits: 0
+      };
+      detail.set(key, entry);
+    }
+    entry.dmg += row.dmg;
+    entry.hits += row.hits;
   }
 
-  detail.sort((a, b) => b.dmg - a.dmg);
+  const classified = (byLabel.weapon || 0) + (byLabel.ability || 0) + (byLabel.item || 0);
 
   return {
     total,
-    detail,
+    detail: Array.from(detail.values())
+      .map((d) => ({ ...d, share: total > 0 ? d.dmg / total : 0 }))
+      .sort((a, b) => b.dmg - a.dmg),
     weapon: byLabel.weapon || 0,
     ability: byLabel.ability || 0,
-    mixed: byLabel.mixed || 0,
-    weaponShare: total > 0 ? (byLabel.weapon || 0) / total : null,
-    abilityShare: total > 0 ? (byLabel.ability || 0) / total : null
+    item: byLabel.item || 0,
+    unclassified: byLabel.unclassified || 0,
+    classified,
+    // Shares are of the damage we could actually classify, so an unresolved
+    // ability id does not silently inflate the other side.
+    weaponShare: classified > 0 ? (byLabel.weapon || 0) / classified : null,
+    abilityShare: classified > 0 ? (byLabel.ability || 0) / classified : null,
+    itemShare: classified > 0 ? (byLabel.item || 0) / classified : null
   };
 }
 
@@ -146,7 +199,6 @@ export function analyzeBuild(analysis, raw, options = {}) {
   const { itemsById = new Map(), itemStats = null } = options;
   const focus = analysis.focus;
 
-  const labels = labelDamageTypes(raw.damageByType || []);
 
   const result = {
     ok: Boolean(focus),
@@ -257,8 +309,9 @@ export function analyzeBuild(analysis, raw, options = {}) {
   /* ---------------- damage profile ---------------- */
 
   result.damage = {
-    taken: damageProfileFor(raw, focus.ctrl, 'taken', labels),
-    dealt: damageProfileFor(raw, focus.ctrl, 'dealt', labels)
+    sources: damageSources(raw.damageByType || [], itemsById),
+    taken: damageProfileFor(raw, focus.ctrl, 'taken', itemsById),
+    dealt: damageProfileFor(raw, focus.ctrl, 'dealt', itemsById)
   };
 
   const takenTotal = result.damage.taken.total;
@@ -291,12 +344,13 @@ export function analyzeBuild(analysis, raw, options = {}) {
     const rawKill = rawByTime.get(Math.round(death.t));
     const breakdown = (rawKill?.preDeathDamage || []).map((entry) => {
       const player = analysis.players.find((p) => p.ctrl === entry.attacker);
-      const info = labels.get(entry.type) || { label: 'mixed' };
+      const meta = itemsById.get(entry.abilityId ?? 0) || null;
       return {
         name: player?.name ?? `#${entry.attacker}`,
         hero: player?.hero ?? null,
         dmg: entry.dmg,
-        label: info.label
+        source: meta?.name ?? null,
+        label: classifyAbility(entry.abilityId ?? 0, itemsById)
       };
     });
     const total = breakdown.reduce((s, b) => s + b.dmg, 0);
@@ -389,6 +443,13 @@ export function analyzeBuild(analysis, raw, options = {}) {
     result.notes.push('Item win-rate data could not be loaded, so nothing here is compared against real matches.');
   }
 
+  const taken = result.damage.taken;
+  if (taken.total > 0 && taken.classified / taken.total < 0.6) {
+    result.notes.push(
+      `Only ${Math.round((taken.classified / taken.total) * 100)}% of the damage you took could be attributed to a known weapon or ability, so the weapon/ability split is unreliable and resist advice is withheld. The Diagnostics tab lists the unresolved sources.`
+    );
+  }
+
   result.suggestions = buildSuggestions(result, analysis, itemsById, itemStats);
   return result;
 }
@@ -429,7 +490,11 @@ function buildSuggestions(build, analysis, itemsById, itemStats) {
   /* ---- resistances vs the damage that actually hit you ---- */
 
   const taken = build.damage?.taken;
-  if (taken && taken.total > 0) {
+  // Only advise on resistances when most of the damage could actually be
+  // attributed to a weapon or an ability. Advising off a mostly-unclassified
+  // sample would be guessing with extra steps.
+  const coverage = taken && taken.total > 0 ? taken.classified / taken.total : 0;
+  if (taken && taken.total > 0 && coverage >= 0.6) {
     const abilityShare = taken.abilityShare ?? 0;
     const weaponShare = taken.weaponShare ?? 0;
 
