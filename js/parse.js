@@ -457,6 +457,10 @@ export async function parseReplay(file, options = {}) {
         d: firstField(c, CTRL_FIELDS.deaths) ?? null,
         a: firstField(c, CTRL_FIELDS.assists) ?? null,
         hd: firstField(c, CTRL_FIELDS.heroDamage) ?? null,
+        // Unspent souls, when the build replicates it. This is ground truth for
+        // the spend curve; deriving it from net worth minus purchases is only a
+        // fallback and is wrong the moment an item cost fails to resolve.
+        un: firstField(c, CTRL_FIELDS.unspent) ?? null,
         x: null, y: null, z: null, hp: null, maxHp: null, alive: null
       });
     }
@@ -773,6 +777,17 @@ export async function parseReplay(file, options = {}) {
   const slotField = detectField(controllers, /slot/i, { distinct: true, numeric: true });
   raw.diagnostics.heroFieldGuess = heroField;
   raw.diagnostics.slotFieldGuess = slotField;
+
+  // Every currency-ish field this build ships, with its final value. Net worth
+  // only ever climbs; unspent souls go down when you buy something, so the two
+  // are easy to tell apart once you can see both.
+  if (controllers.length > 0) {
+    const flat = dumpFields(controllers[0]);
+    raw.diagnostics.currencyFields = Object.entries(flat)
+      .filter(([k, v]) => typeof v === 'number' && /gold|soul|currenc|cash|money/i.test(k))
+      .map(([k, v]) => ({ field: k, value: v }))
+      .sort((a, b) => b.value - a.value);
+  }
 
   for (const c of controllers) {
     const rec = playersByCtrl.get(c.index);

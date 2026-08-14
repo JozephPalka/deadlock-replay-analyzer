@@ -661,4 +661,73 @@ check('diagnostics shows full resolution when names are available', () => {
   assert.ok(!html.includes('Unresolved ids'), 'should not list unresolved ids when all resolve');
 });
 
+
+/* ------------------------------------------------------------------ */
+/* unspent souls — regression cover for the 30k-for-39-minutes bug     */
+/* ------------------------------------------------------------------ */
+
+check('unspent souls are not reported when item costs are unknown', () => {
+  // Exactly the failure that claimed a player sat on 30,678 souls for 39
+  // minutes: item metadata missing, so every cost is null, spend reads as
+  // zero, and "unspent" becomes the player's whole net worth.
+  const a = analyze(raw, { focusCtrl: FOCUS.ctrl, itemName: () => null });
+  const b = analyzeBuild(a, raw, { itemsById: new Map(), itemStats: null });
+
+  assert.equal(b.purchases.length, 4, 'purchases are still listed');
+  assert.ok(b.purchases.every((p) => p.cost === null), 'no cost could be resolved');
+  assert.equal(b.spend.method, 'unavailable');
+  assert.equal(b.spend.worstBanking, null, 'must not claim a banking run');
+  assert.ok(
+    !b.suggestions.some((s) => /unspent souls/i.test(s.title)),
+    'must not advise on souls it cannot count'
+  );
+  assert.ok(b.notes.some((n) => /no known cost/i.test(n)), 'should explain why');
+
+  // And the number that was being reported must appear nowhere.
+  const finalNetWorth = a.farm.rows.find((r) => r.ctrl === FOCUS.ctrl).final;
+  assert.ok(
+    !b.spend.series.some((p) => p.banked === finalNetWorth),
+    'net worth must never be presented as unspent souls'
+  );
+});
+
+check('unspent souls are not reported when no purchase matched the player', () => {
+  const orphaned = { ...raw, items: raw.items.map((i) => ({ ...i, ctrl: null })) };
+  const a = analyze(orphaned, { focusCtrl: FOCUS.ctrl, itemName: (id) => itemsById.get(id) || null });
+  const b = analyzeBuild(a, orphaned, { itemsById, itemStats });
+  assert.equal(b.purchases.length, 0);
+  assert.equal(b.spend.method, 'unavailable');
+  assert.equal(b.spend.worstBanking, null);
+  assert.ok(b.notes.some((n) => /No purchases were matched/i.test(n)));
+});
+
+check('a replicated unspent-souls field is preferred over deriving it', () => {
+  // When the replay reports current souls directly, use that and do not do
+  // arithmetic on net worth at all.
+  const withUnspent = {
+    ...raw,
+    samples: raw.samples.map((s) => ({
+      t: s.t,
+      players: s.players.map((p) => (p.ctrl === FOCUS.ctrl ? { ...p, un: 250 } : p))
+    }))
+  };
+  const a = analyze(withUnspent, { focusCtrl: FOCUS.ctrl, itemName: (id) => itemsById.get(id) || null });
+  const b = analyzeBuild(a, withUnspent, { itemsById, itemStats });
+  assert.equal(b.spend.method, 'measured');
+  assert.ok(b.spend.series.every((p) => p.banked === 250), 'should use the reported value verbatim');
+  assert.equal(b.spend.worstBanking, null, '250 souls is not hoarding');
+});
+
+check('genuine hoarding is still reported when costs are known', () => {
+  // The guard must not suppress the real thing: this player buys twice and
+  // then banks everything, which is a low spend-to-net-worth ratio and a
+  // legitimate finding.
+  const hoarder = { ...raw, items: raw.items.filter((i) => i.t <= 400) };
+  const a = analyze(hoarder, { focusCtrl: FOCUS.ctrl, itemName: (id) => itemsById.get(id) || null });
+  const b = analyzeBuild(a, hoarder, { itemsById, itemStats });
+  assert.equal(b.spend.method, 'derived');
+  assert.ok(b.spend.worstBanking, 'real hoarding must still be caught');
+  assert.ok(b.suggestions.some((s) => /unspent souls/i.test(s.title)));
+});
+
 console.log(`\n${passed} checks passed${process.exitCode ? ' — with failures above' : ''}\n`);

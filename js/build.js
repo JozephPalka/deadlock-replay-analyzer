@@ -207,7 +207,7 @@ export function analyzeBuild(analysis, raw, options = {}) {
     purchases: [],
     categories: { weapon: 0, vitality: 0, spirit: 0, unknown: 0 },
     categorySouls: { weapon: 0, vitality: 0, spirit: 0, unknown: 0 },
-    spend: { series: [], totalCommitted: 0, worstBanking: null, costsEstimated: false },
+    spend: { series: [], totalCommitted: 0, worstBanking: null, costsEstimated: false, method: 'unavailable' },
     damage: null,
     threats: [],
     enemyHealing: 0,
@@ -270,7 +270,55 @@ export function analyzeBuild(analysis, raw, options = {}) {
   /* ---------------- soul banking ---------------- */
 
   const netWorth = analysis.farm.rows.find((r) => r.ctrl === focus.ctrl)?.series || [];
-  if (netWorth.length > 0 && mine.length > 0) {
+
+  /*
+   * Unspent souls come from one of two places, in order of trust:
+   *
+   *   measured — the replay replicates a current-souls field, which is exact.
+   *   derived  — net worth minus what the purchases cost.
+   *
+   * The derived route is only valid if every purchase has a known cost. If item
+   * metadata failed to load, costs are null, spend reads as zero and "unspent"
+   * becomes the player's entire net worth — which is how this metric once
+   * announced someone sat on 30,000 souls for a whole match. So it is gated:
+   * no trustworthy spend figure, no claim.
+   */
+  const measured = [];
+  for (const sample of raw.samples || []) {
+    const row = sample.players.find((p) => p.ctrl === focus.ctrl);
+    if (row && row.un !== null && row.un !== undefined) measured.push({ t: sample.t, v: row.un });
+  }
+
+  const pricedPurchases = result.purchases.filter((p) => Number.isFinite(p.cost) && p.cost > 0);
+  const unpriced = result.purchases.length - pricedPurchases.length;
+
+  /*
+   * The gate is whether every purchase has a known cost — not whether the
+   * spend looks large enough. A low spend relative to net worth is exactly what
+   * genuine hoarding looks like, so judging by ratio would suppress the very
+   * thing this metric exists to find. Missing costs, on the other hand, make
+   * the arithmetic silently wrong.
+   */
+  const allPriced = result.purchases.length > 0 && unpriced === 0;
+
+  if (measured.length > 0) {
+    result.spend.method = 'measured';
+  } else if (netWorth.length > 0 && allPriced) {
+    result.spend.method = 'derived';
+  } else {
+    result.spend.method = 'unavailable';
+    if (result.purchases.length === 0) {
+      result.notes.push(
+        'No purchases were matched to you, so unspent souls cannot be worked out and the spend curve shows net worth only.'
+      );
+    } else {
+      result.notes.push(
+        `${unpriced} of your ${result.purchases.length} purchases have no known cost, so unspent souls cannot be worked out — the figure would just be your net worth. Check item name resolution in Diagnostics.`
+      );
+    }
+  }
+
+  if (netWorth.length > 0 && result.spend.method !== 'unavailable') {
     const spendAt = (t) => {
       let total = 0;
       for (const p of result.purchases) {
@@ -280,14 +328,24 @@ export function analyzeBuild(analysis, raw, options = {}) {
       return total;
     };
 
+    const measuredAt = (t) => {
+      if (measured.length === 0) return null;
+      let best = measured[0].v;
+      for (const point of measured) {
+        if (point.t <= t) best = point.v;
+        else break;
+      }
+      return best;
+    };
+
     let run = null;
     for (const point of netWorth) {
-      const banked = point.v - spendAt(point.t);
+      const banked = result.spend.method === 'measured' ? measuredAt(point.t) : point.v - spendAt(point.t);
       result.spend.series.push({ t: point.t, netWorth: point.v, committed: spendAt(point.t), banked });
 
       // A "banking" run is a stretch sitting on enough souls to have bought
       // something meaningful. Early game is excluded: everyone banks at the start.
-      const meaningful = point.t > 240 && banked > 1500;
+      const meaningful = point.t > 240 && Number.isFinite(banked) && banked > 1500;
       if (meaningful) {
         if (!run) run = { from: point.t, to: point.t, peak: banked };
         else {
@@ -577,7 +635,11 @@ function buildSuggestions(build, analysis, itemsById, itemStats) {
       [
         `From ${formatClock(banking.from)} to ${formatClock(banking.to)}`,
         deathsDuring > 0 ? `You died ${deathsDuring} time${deathsDuring === 1 ? '' : 's'} during that stretch` : 'No deaths during that stretch',
-        build.spend.costsEstimated ? 'Costs partly estimated from item tier, so treat the figure as approximate' : null
+        build.spend.method === 'measured'
+          ? 'Unspent souls read directly from the replay'
+          : build.spend.costsEstimated
+            ? 'Derived from net worth minus purchase costs, some inferred from item tier, so treat the figure as approximate'
+            : 'Derived from net worth minus what your purchases cost'
       ].filter(Boolean),
       []
     );

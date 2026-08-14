@@ -426,15 +426,19 @@ function renderBuild(analysis, ctx) {
     : '<p class="muted">No purchases were resolved for this player — check Diagnostics.</p>';
 
   /* ---- spend curve ---- */
+  const spendSeries = [
+    { label: 'Net worth', color: COLORS.sapphire, points: build.spend.series.map((s) => ({ t: s.t, v: s.netWorth })), emphasis: true },
+    { label: 'Committed to items', color: COLORS.focus, points: build.spend.series.map((s) => ({ t: s.t, v: s.committed })), emphasis: true }
+  ];
+  if (build.spend.method !== 'unavailable') {
+    spendSeries.push({
+      label: build.spend.method === 'measured' ? 'Unspent (from the replay)' : 'Unspent (derived)',
+      color: COLORS.bad,
+      points: build.spend.series.map((s) => ({ t: s.t, v: Math.max(0, s.banked ?? 0) }))
+    });
+  }
   const spendChart = build.spend.series.length
-    ? lineChart({
-        series: [
-          { label: 'Net worth', color: COLORS.sapphire, points: build.spend.series.map((s) => ({ t: s.t, v: s.netWorth })), emphasis: true },
-          { label: 'Committed to items', color: COLORS.focus, points: build.spend.series.map((s) => ({ t: s.t, v: s.committed })), emphasis: true },
-          { label: 'Unspent (estimated)', color: COLORS.bad, points: build.spend.series.map((s) => ({ t: s.t, v: Math.max(0, s.banked) })) }
-        ],
-        height: 280
-      })
+    ? lineChart({ series: spendSeries, height: 280 })
     : '<p class="muted">Not enough data to draw the spend curve.</p>';
 
   /* ---- categories ---- */
@@ -525,9 +529,11 @@ function renderBuild(analysis, ctx) {
       <div class="card"><span class="card-label">Damage taken: weapon</span><span class="card-value">${taken && taken.weaponShare !== null ? `${Math.round(taken.weaponShare * 100)}%` : '—'}</span></div>
       <div class="card"><span class="card-label">Enemy healing</span><span class="card-value">${num(build.enemyHealing, '0')}</span></div>
       <div class="card"><span class="card-label">Longest soul bank</span><span class="card-value">${
-        build.spend.worstBanking
-          ? `${Math.round((build.spend.worstBanking.to - build.spend.worstBanking.from) / 60)} min`
-          : '—'
+        build.spend.method === 'unavailable'
+          ? '<span class="muted">not measurable</span>'
+          : build.spend.worstBanking
+            ? `${Math.round((build.spend.worstBanking.to - build.spend.worstBanking.from) / 60)} min`
+            : 'none'
       }</span></div>
     </div>
 
@@ -538,7 +544,13 @@ function renderBuild(analysis, ctx) {
     ${purchaseTable}
 
     <h3>Spending over time</h3>
-    <p class="muted">Unspent is estimated as net worth minus what your purchases cost${build.spend.costsEstimated ? ', with some costs inferred from item tier' : ''}. Flat stretches of the green line are souls doing nothing.</p>
+    <p class="muted">${
+      build.spend.method === 'measured'
+        ? 'Unspent souls are read directly from the replay.'
+        : build.spend.method === 'derived'
+          ? `Unspent is derived as net worth minus what your purchases cost${build.spend.costsEstimated ? ', with some costs inferred from item tier' : ''}.`
+          : 'Unspent souls could not be worked out for this replay, so only net worth and committed spend are shown \u2014 see the note above.'
+    } Flat stretches of the green line are souls doing nothing.</p>
     ${spendChart}
 
     <div class="split">
